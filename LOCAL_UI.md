@@ -6,6 +6,24 @@
 - 当前服务名：`rdagent-ui.service`
 - 当前访问地址：`http://127.0.0.1:19899`
 
+## GitHub 同步
+
+当前本地改动已经切到你的 fork 工作流：
+
+- Fork：`https://github.com/BnFeng/RD-Agent`
+- 开发分支：`local-prediction-market`
+
+日常同步建议使用：
+
+```bash
+cd /root/Ai-polyTest/RD-Agent
+./scripts/git_sync.sh "feat: 你的改动说明"
+```
+
+更完整的远端与分支说明见：
+
+- `GITHUB_SYNC.md`
+
 ## 管理命令
 
 安装并启动：
