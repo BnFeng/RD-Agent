@@ -1,0 +1,21 @@
+[Unit]
+Description=RD-Agent Official UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Ai-polyTest/RD-Agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/root/miniconda3/envs/rdagent/bin:/root/miniconda3/condabin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/root/miniconda3/envs/rdagent/bin/rdagent ui --port 19899 --log-dir /root/Ai-polyTest/RD-Agent/log
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+StandardOutput=append:/root/Ai-polyTest/RD-Agent/logs/ui.log
+StandardError=append:/root/Ai-polyTest/RD-Agent/logs/ui.log
+
+[Install]
+WantedBy=multi-user.target

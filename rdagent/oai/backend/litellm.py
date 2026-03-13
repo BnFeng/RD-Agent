@@ -45,6 +45,28 @@ LITELLM_SETTINGS = LiteLLMSettings()
 ACC_COST = 0.0
 
 
+def _mask_secret_value(value: Any) -> Any:
+    if not isinstance(value, str) or value == "":
+        return value
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:2]}***{value[-2:]}"
+
+
+def _sanitize_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    secret_keywords = ("key", "token", "secret", "password", "passphrase")
+    sanitized_payload: dict[str, Any] = {}
+    for field_name, field_value in payload.items():
+        if isinstance(field_value, dict):
+            sanitized_payload[field_name] = _sanitize_settings(field_value)
+            continue
+        if any(keyword in field_name.lower() for keyword in secret_keywords):
+            sanitized_payload[field_name] = _mask_secret_value(field_value)
+            continue
+        sanitized_payload[field_name] = field_value
+    return sanitized_payload
+
+
 class LiteLLMAPIBackend(APIBackend):
     """LiteLLM implementation of APIBackend interface"""
 
@@ -52,8 +74,13 @@ class LiteLLMAPIBackend(APIBackend):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         if not self.__class__._has_logged_settings:
-            logger.info(f"{LITELLM_SETTINGS}")
-            logger.log_object(LITELLM_SETTINGS.model_dump(), tag="LITELLM_SETTINGS")
+            sanitized_settings = _sanitize_settings(LITELLM_SETTINGS.model_dump())
+            logger.info(
+                f"LiteLLM settings loaded: chat_model={sanitized_settings['chat_model']}, "
+                f"embedding_model={sanitized_settings['embedding_model']}, "
+                f"reasoning_effort={sanitized_settings['reasoning_effort']}",
+            )
+            logger.log_object(sanitized_settings, tag="LITELLM_SETTINGS")
             self.__class__._has_logged_settings = True
         super().__init__(*args, **kwargs)
 

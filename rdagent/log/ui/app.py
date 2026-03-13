@@ -44,13 +44,28 @@ parser = argparse.ArgumentParser(description="RD-Agent Streamlit App")
 parser.add_argument("--log_dir", type=str, help="Path to the log directory")
 parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 args = parser.parse_args()
-if args.log_dir:
-    main_log_path = Path(args.log_dir)
-    if not main_log_path.exists():
-        st.error(f"Log dir `{main_log_path}` does not exist!")
+
+
+def resolve_main_log_path() -> Path | None:
+    candidates: list[Path] = []
+    if args.log_dir:
+        candidates.append(Path(args.log_dir))
+
+    repo_log_dir = Path(__file__).resolve().parents[3] / "log"
+    candidates.append(repo_log_dir)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    if args.log_dir:
+        st.error(f"Log dir `{Path(args.log_dir)}` does not exist!")
         st.stop()
-else:
-    main_log_path = None
+
+    return None
+
+
+main_log_path = resolve_main_log_path()
 
 
 QLIB_SELECTED_METRICS = [
@@ -69,21 +84,50 @@ SIMILAR_SCENARIOS = (
 )
 
 
+def is_valid_log_folder(folder: Path) -> bool:
+    if not folder.is_dir():
+        return False
+    if any(folder.glob("scenario/*.pkl")):
+        return True
+    if any(folder.glob("summary/*.log")):
+        return True
+    return False
+
+
 def filter_log_folders(main_log_path):
     """
     Filter and return the log folders relative to the main log path.
     """
-    folders = [folder.relative_to(main_log_path) for folder in main_log_path.iterdir() if folder.is_dir()]
+    folders = [
+        folder.relative_to(main_log_path)
+        for folder in main_log_path.iterdir()
+        if folder.is_dir() and is_valid_log_folder(folder)
+    ]
     folders = sorted(folders, key=lambda x: x.name)
     return folders
 
 
-if "log_path" not in state:
-    if main_log_path:
-        state.log_path = filter_log_folders(main_log_path)[0]
-    else:
+def ensure_log_path_selected() -> None:
+    if "log_path" not in state:
         state.log_path = None
-        st.toast(":red[**Please Set Log Path!**]", icon="⚠️")
+
+    if not main_log_path:
+        if state.log_path is None:
+            st.toast(":red[**Please Set Log Path!**]", icon="⚠️")
+        return
+
+    folders = filter_log_folders(main_log_path)
+    if not folders:
+        state.log_path = None
+        st.toast(f":red[**No valid log trace found in `{main_log_path}`!**]", icon="⚠️")
+        return
+
+    current_log_path = state.log_path
+    if current_log_path is None or Path(str(current_log_path)) not in folders:
+        state.log_path = folders[0]
+
+
+ensure_log_path_selected()
 
 if "scenario" not in state:
     state.scenario = None
@@ -760,7 +804,10 @@ with st.sidebar:
                 st.text_input("log path", key="log_path", on_change=refresh, label_visibility="collapsed")
             else:
                 folders = filter_log_folders(main_log_path)
-                st.selectbox(f"**Select from `{main_log_path}`**", folders, key="log_path", on_change=refresh)
+                if folders:
+                    st.selectbox(f"**Select from `{main_log_path}`**", folders, key="log_path", on_change=refresh)
+                else:
+                    st.info(f"`{main_log_path}` 下还没有可展示的日志轨迹")
         else:
             st.text_input(":blue[**log path**]", key="log_path", on_change=refresh)
 

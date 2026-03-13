@@ -23,6 +23,8 @@ from rdagent.app.data_science.loop import main as data_science
 from rdagent.app.general_model.general_model import (
     extract_models_and_implement as general_model,
 )
+from rdagent.app.prediction_market.debug import prediction_market_debug, prediction_market_match
+from rdagent.app.prediction_market.signals import prediction_market_signal_once, prediction_market_signal_worker
 from rdagent.app.qlib_rd_loop.factor import main as fin_factor
 from rdagent.app.qlib_rd_loop.factor_from_report import main as fin_factor_report
 from rdagent.app.qlib_rd_loop.model import main as fin_model
@@ -81,6 +83,10 @@ app.command(name="server_ui")(server_ui)
 app.command(name="health_check")(health_check)
 app.command(name="collect_info")(collect_info)
 app.command(name="ds_user_interact")(ds_user_interact)
+app.command(name="prediction_market_debug")(prediction_market_debug)
+app.command(name="prediction_market_match")(prediction_market_match)
+app.command(name="prediction_market_signal_once")(prediction_market_signal_once)
+app.command(name="prediction_market_signal_worker")(prediction_market_signal_worker)
 
 
 if __name__ == "__main__":
