@@ -178,9 +178,12 @@ def _iter_signal_candidates(
         for raw in raw_items:
             if not isinstance(raw, dict):
                 continue
+            signal_family = str(raw.get("signal_family") or bucket)
             entry_legs = raw.get("entry_legs") or raw.get("legs") or []
             if not isinstance(entry_legs, list):
                 entry_legs = []
+            if signal_family in {"cross_source_spread", "basket_arbitrage"} and not entry_legs:
+                continue
             market_uid = raw.get("market_uid")
             if not market_uid and entry_legs:
                 market_uid = entry_legs[0].get("market_uid")
@@ -188,7 +191,7 @@ def _iter_signal_candidates(
                 candidate_id=f"{bucket}:{_signal_key(bucket, raw)}",
                 source_signal_bucket=bucket,
                 source_signal_key=_signal_key(bucket, raw),
-                source_signal_family=str(raw.get("signal_family") or bucket),
+                source_signal_family=signal_family,
                 display_name=str(raw.get("display_name") or raw.get("market_title") or market_uid or bucket),
                 direction_label=raw.get("direction_label") or raw.get("signal_reason") or raw.get("reason"),
                 actionability=_infer_actionability(bucket, raw),
@@ -245,10 +248,41 @@ def _iter_signal_candidates(
     return selected[:limit]
 
 
+def _cross_source_guardrail(candidate: SignalCandidate) -> tuple[str | None, list[str]]:
+    if not candidate.entry_legs:
+        return "缺少可执行腿定义", ["不进入实时模拟下注"]
+    if candidate.source_signal_bucket != "formal_signals":
+        return "来源不是正式信号桶", ["跳过原始候选，避免重复和误触发"]
+    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+    semantic_conflict_flags = [str(item) for item in (raw.get("semantic_conflict_flags") or []) if item]
+    if semantic_conflict_flags:
+        return "；".join(semantic_conflict_flags), ["命题语义存在冲突，禁止进入 tradable"]
+    match_level = str(raw.get("match_level") or "").strip().lower()
+    match_confidence = float(_safe_float(raw.get("match_confidence")) or 0.0)
+    if match_level != "high" or match_confidence < 0.82:
+        return "跨平台命题对齐置信度不足", [f"当前 match_level={match_level or 'unknown'}", f"match_confidence={match_confidence:.4f}"]
+    return None, []
+
+
 def _fallback_decision(candidate: SignalCandidate) -> SignalDecision:
     expected_edge_bps = float(candidate.expected_edge_bps or 0.0)
     priority_score = float(candidate.priority_score or 0.0)
     if candidate.source_signal_family in {"cross_source_spread", "basket_arbitrage"} and candidate.actionability == "tradable":
+        if candidate.source_signal_family == "cross_source_spread":
+            guardrail_reason, guardrail_flags = _cross_source_guardrail(candidate)
+            if guardrail_reason:
+                return SignalDecision(
+                    emit=True,
+                    actionability="research",
+                    confidence=min(0.72, 0.4 + min(priority_score, 100.0) / 500),
+                    priority_score=max(50.0, priority_score or 50.0),
+                    max_age_sec=120,
+                    fair_probability=None,
+                    target_entry_min=None,
+                    target_entry_max=None,
+                    reason=f"启发式降级：{guardrail_reason}",
+                    risk_flags=guardrail_flags,
+                )
         return SignalDecision(
             emit=True,
             actionability="tradable",
@@ -262,18 +296,24 @@ def _fallback_decision(candidate: SignalCandidate) -> SignalDecision:
             risk_flags=[],
         )
     if candidate.source_signal_family == "information_edge" and candidate.actionability in {"tradable", "research"}:
-        actionability = "tradable" if candidate.actionability == "tradable" and expected_edge_bps >= 120 else "research"
+        should_trade = (
+            candidate.actionability == "tradable"
+            and bool(candidate.entry_legs)
+            and bool(candidate.market_uid)
+            and expected_edge_bps >= 180
+            and priority_score >= 70
+        )
         return SignalDecision(
             emit=True,
-            actionability=actionability,
-            confidence=min(0.84, 0.55 + min(expected_edge_bps, 500.0) / 1800 + min(priority_score, 100.0) / 600),
+            actionability="tradable" if should_trade else "research",
+            confidence=min(0.86, 0.55 + min(expected_edge_bps, 600.0) / 1700 + min(priority_score, 100.0) / 580),
             priority_score=max(55.0, priority_score or 55.0),
-            max_age_sec=900,
+            max_age_sec=1800 if should_trade else 900,
             fair_probability=candidate.fair_probability,
             target_entry_min=None,
             target_entry_max=None,
-            reason="启发式通过：长期信息差具备正边际，进入 RD-Agent 信号层",
-            risk_flags=[],
+            reason="启发式通过：长期信息差允许真实单腿入场，但必须等待真实退出或市场结算确认收益" if should_trade else "启发式通过：长期信息差进入研究队列，等待真实平仓或市场结算验证",
+            risk_flags=["单腿真实入场后仅记录持仓，不预先确认收益"] if should_trade else ["不进入实时套利模拟，必须依赖真实退出或结算数据确认"],
         )
     if candidate.source_signal_family in {"microstructure_pressure", "repricing_lag"} and candidate.actionability in {"tradable", "research"}:
         should_emit = expected_edge_bps >= 80 or priority_score >= 70
@@ -541,7 +581,7 @@ def _run_prediction_market_signal_once(
 def prediction_market_signal_once(
     pmm_root: str = typer.Option("../prediction-market-monitor", help="prediction-market-monitor 根目录"),
     output_dir: str = typer.Option("", help="输出目录，默认写入 PMM 的 data/rdagent"),
-    candidate_buckets: str = typer.Option("cross_source_spread,basket_arbitrage,information_edge,formal_signals", help="候选信号桶，逗号分隔"),
+    candidate_buckets: str = typer.Option("formal_signals,information_edge", help="候选信号桶，逗号分隔"),
     candidate_limit: int = typer.Option(10, min=1, help="最多分析多少个候选信号"),
     max_signals: int = typer.Option(8, min=1, help="最多保留多少个 RD-Agent 信号"),
     min_confidence: float = typer.Option(0.66, min=0.0, max=1.0, help="最小置信度"),
@@ -565,7 +605,7 @@ def prediction_market_signal_once(
 def prediction_market_signal_worker(
     pmm_root: str = typer.Option("../prediction-market-monitor", help="prediction-market-monitor 根目录"),
     output_dir: str = typer.Option("", help="输出目录，默认写入 PMM 的 data/rdagent"),
-    candidate_buckets: str = typer.Option("cross_source_spread,basket_arbitrage,information_edge,formal_signals", help="候选信号桶，逗号分隔"),
+    candidate_buckets: str = typer.Option("formal_signals,information_edge", help="候选信号桶，逗号分隔"),
     candidate_limit: int = typer.Option(10, min=1, help="最多分析多少个候选信号"),
     max_signals: int = typer.Option(8, min=1, help="最多保留多少个 RD-Agent 信号"),
     min_confidence: float = typer.Option(0.66, min=0.0, max=1.0, help="最小置信度"),
